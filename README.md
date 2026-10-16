@@ -14,6 +14,8 @@
 body mesh, or a sketch it never saw in training) into a finished video, with an optional first frame and a prompt
 deciding the look. It runs on **MiniMax-H3** with two LoRAs and renders a clip in **four steps**.
 A block-causal pair of the same LoRAs streams the clip block by block.
+SolarRenderer is built on [SolarWM](https://github.com/Junchao-cs/SolarWM), the open framework for
+training and inference of video world models ([paper](https://arxiv.org/abs/2609.02886)).
 
 ## News
 
@@ -80,13 +82,30 @@ Add `--causal` with the two causal LoRAs to stream the clip block by block
 
 ## Citation
 
+If you use SolarRenderer in your research, please cite SolarRenderer and SolarWM, the framework on which it is built.
+
 ```bibtex
 @article{fang2026solarrenderer,
   title  = {SolarRenderer: Few-Step Generative Reference Rendering},
   author = {Fang, Guian and Qian, Shengju and Lu, Dongyue and
             Huang, Junchao and Jiang, Lutao and Wang, Xin and
             Song, Yiren and Jiang, Li and Shou, Mike Zheng},
-  year   = {2026}
+  year   = {2026},
+  url    = {https://enderfga.cn/data/solarrenderer.pdf}
+}
+```
+
+[SolarWM: Open Data and Scalable Training for Long-Horizon Video World Models](https://arxiv.org/abs/2609.02886):
+
+```bibtex
+@misc{huang2026solarwmopendatascalable,
+      title={SolarWM: Open Data and Scalable Training for Long-Horizon Video World Models},
+      author={Junchao Huang and Guian Fang and Shengju Qian and Xianghao Kong and Zhuoran Zhao and Wei Huang and Yihua Du and Zixin Zhang and Justin Cui and Yuchao Gu and Yukang Chen and Xinting Hu and Tianyu He and Shaoshuai Shi and Zhuotao Tian and Xin Wang and Mike Zheng Shou and Li Jiang},
+      year={2026},
+      eprint={2609.02886},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2609.02886},
 }
 ```
 
