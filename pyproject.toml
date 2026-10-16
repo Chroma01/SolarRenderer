@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "solarrenderer"
+version = "1.0.0"
+description = "SolarRenderer: structure-conditioned video rendering on MiniMax-H3."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{name = "SolarRenderer authors"}]
+# The versions the release was tested with.
+dependencies = [
+  "torch>=2.8,<2.9",
+  "torchvision>=0.23,<0.24",
+  "diffusers==0.40.0",
+  "transformers==5.14.1",
+  "peft==0.20.0",
+  "accelerate>=1.14",
+  "safetensors>=0.8",
+  "huggingface_hub>=1.25",
+  "fsspec>=2024.6",
+  "einops>=0.8",
+  "numpy>=1.26,<2",
+  "PyYAML>=6.0",
+  "av>=13.1",
+  "pillow>=11",
+  "imageio==2.37.4",
+  "imageio-ffmpeg==0.6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+solarwm = "solarwm.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

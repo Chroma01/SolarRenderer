@@ -1,0 +1,100 @@
+{
+  "camera_convention": "absolute_c2w+normalized_K",
+  "extras": {
+    "encoder_identity": "official-minimax-h3-codec",
+    "frame_sampling": "exact_contiguous",
+    "qwen_hidden_state": 50,
+    "qwen_presentation": "<Picture 1> joint image+caption",
+    "silence_artifact_profile": {
+      "artifact": "official-audiovae-encoded-stereo-zero-waveform",
+      "audio_hop_length": 800,
+      "audio_sampling_rate": 32000,
+      "format": "h3.158f.v1",
+      "normalization": "audio_vae.config.latents_mean_std",
+      "posterior": "mode",
+      "schema": "solarwm.minimax-h3-silence-profile.v1",
+      "tensor": {
+        "dtype": "bfloat16",
+        "key": "silence_158f",
+        "shape": [
+          2,
+          32,
+          263
+        ]
+      },
+      "waveform": "real_stereo_zero_waveform"
+    },
+    "source_fps_policy": "audit_only",
+    "video_vae_normalization": "config.latents_mean_std",
+    "video_vae_posterior": "sample(seed=42)-fp16-round"
+  },
+  "family": "minimax_h3",
+  "format_version": "h3.158f.v1",
+  "height": 768,
+  "latent_frames": 47,
+  "pixel_frames": 158,
+  "schema": "solarwm.encoder.v1",
+  "tensors": [
+    {
+      "dtype": "bfloat16",
+      "name": "target_latents",
+      "shape": [
+        24,
+        47,
+        48,
+        84
+      ]
+    },
+    {
+      "dtype": "bfloat16",
+      "name": "anchor_latents",
+      "shape": [
+        24,
+        1,
+        48,
+        84
+      ]
+    },
+    {
+      "dtype": "bfloat16",
+      "name": "prompt_embeds",
+      "shape": [
+        null,
+        5120
+      ]
+    },
+    {
+      "dtype": "int64",
+      "name": "text_token_tags",
+      "shape": [
+        null
+      ]
+    },
+    {
+      "dtype": "int64",
+      "name": "source_frame_indices",
+      "shape": [
+        158
+      ]
+    },
+    {
+      "dtype": "float32",
+      "name": "camera_c2w",
+      "shape": [
+        158,
+        4,
+        4
+      ]
+    },
+    {
+      "dtype": "float32",
+      "name": "camera_K",
+      "shape": [
+        158,
+        3,
+        3
+      ]
+    }
+  ],
+  "width": 1344
+}
