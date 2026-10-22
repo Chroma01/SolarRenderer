@@ -14,8 +14,8 @@
 
 The inputs are encoded exactly as the training samples were (tools/omni_preencode.py): the structure video laid over
 every target frame, the first frame over latent 0, the prompt through the released Qwen3-VL presentation. The
-renderer is MiniMax-H3's Ref2VA transformer with the four-step LoRA merged into its weights and the control LoRA on
-top, sampled in four evaluations with fresh noise between them. Output: 1344x768 (or 768x1344), 24 fps, 158 frames.
+renderer is MiniMax-H3's Ref2VA transformer with the four-step LoRA and the control LoRA merged into its weights at
+once, sampled in four evaluations with fresh noise between them. Output: 1344x768 (or 768x1344), 24 fps, 158 frames.
 With --causal the causal pair renders block-causally: each block of at most 5 latents sees the prompt, the first frame,
 the structure of the last 6 blocks and the clean frames of the 5 blocks before it - never a later block - and is
 sampled in four evaluations before it is committed to the cache.
@@ -132,8 +132,8 @@ CAUSAL = {"mode": "teacher", "chunk": 5, "window": 6, "corrupt": 0.0}  # the cau
 
 
 def load_renderer(h3: str, control: str, fewstep: str, device: str, causal: bool = False, frames: int = FRAMES):
-    """MiniMax-H3's Ref2VA transformer, the four-step LoRA merged in, the control LoRA on top; returns a renderer for
-    clips of up to ``frames``."""
+    """MiniMax-H3's Ref2VA transformer with the four-step and control LoRAs merged in; returns a renderer for clips of
+    up to ``frames``."""
 
     import torch
 
