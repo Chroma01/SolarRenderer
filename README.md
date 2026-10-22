@@ -4,6 +4,7 @@
 
 <p align="center">
   🌐 <a href="https://enderfga.cn/SolarRenderer">Project Page</a> •
+  🎮 <a href="https://huggingface.co/spaces/Enderfga/SolarRenderer">Online Demo</a> •
   📄 <a href="https://arxiv.org/abs/2610.28630">Paper</a> •
   🤗 <a href="https://huggingface.co/Enderfga/SolarRenderer">Weights</a> •
   🤗 <a href="https://huggingface.co/datasets/Enderfga/SolarRenderer-Data">Data</a> •
@@ -19,6 +20,7 @@ training and inference of video world models ([paper](https://arxiv.org/abs/2609
 
 ## News
 
+- **[2026-10]** Try it in the browser: an [online demo](https://huggingface.co/spaces/Enderfga/SolarRenderer) on Hugging Face Spaces.
 - **[2026-10]** Code, weights, the shareable training data and the benchmark released.
 
 ## Highlights
@@ -84,6 +86,7 @@ Add `--causal` with the two causal LoRAs to stream the clip block by block
 
 | | For | Start here |
 |---|---|---|
+| **Online demo** | No install: upload a structure video, add or generate a first frame, render in the browser | [Hugging Face Space](https://huggingface.co/spaces/Enderfga/SolarRenderer) |
 | **Reference script** | The reference implementation: one GPU, a clip at a time | `scripts/render.py` above |
 | **ComfyUI** | A browser page and node workflows with no code; the low-memory workflow fits a 16 GB GPU (e.g. RTX 4090) | [`comfyui/`](comfyui/README.md) |
 | **Streaming on [Reactor](https://reactor.inc)** | The fastest path: a four-GPU streaming service with a browser demo, validated by the Reactor team on four B200 GPUs | [`reactor/`](reactor/README.md) |
