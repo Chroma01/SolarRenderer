@@ -408,11 +408,62 @@ def reference(
     return MiniMaxH3VideoReference(frames=prepared(frames, fps, num_frames), fps=FPS)
 
 
+def _encode_conditions_clipwise(max_whole_frames: int = 1500) -> None:
+    """Past a minute, a visual condition is normalized and encoded clip by clip from the host.
+
+    The released encode_vae_condition turns the whole video into float32 on the card before the VAE splits it into
+    17-frame clips - three minutes is ~50 GB per copy, more than a card holds beside the text encoder. The VAE encodes
+    every clip on its own, so normalizing each clip as it goes to the card and joining the moments gives the same
+    numbers; shorter videos keep the released path."""
+    import torch
+    from diffusers.models.autoencoders.vae import DiagonalGaussianDistribution
+    from diffusers.models.modeling_utils import get_parameter_dtype
+    from diffusers.modular_pipelines.minimax_h3 import encoders
+
+    whole = encoders.encode_vae_condition
+
+    def clipwise(vae, pixels, pixel_mean, pixel_std, encode_seed=42):
+        if pixels.shape[2] <= max_whole_frames:
+            return whole(vae, pixels, pixel_mean, pixel_std, encode_seed)
+        device, dtype, clip = pixels.device, get_parameter_dtype(vae.encoder), vae.config.clip_length
+        mean = torch.tensor(pixel_mean, device=device).view(1, -1, 1, 1, 1)
+        std = torch.tensor(pixel_std, device=device).view(1, -1, 1, 1, 1)
+        host = pixels.cpu()
+        if host.shape[2] % clip:
+            host = torch.cat([host, host[:, :, -1:].repeat(1, 1, (-host.shape[2]) % clip, 1, 1)], dim=2)
+        moments = torch.cat([
+            vae._encode_clip(((host[:, :, i:i + clip].to(device).to(torch.float32).div(255.0) - mean) / std).to(dtype))
+            for i in range(0, host.shape[2], clip)], dim=2)
+        if vae.config.token_drop > 0:
+            moments = moments[:, :, :-vae.config.token_drop]
+        latents = DiagonalGaussianDistribution(moments).sample(generator=torch.Generator().manual_seed(encode_seed))
+        latents = latents.to(torch.float16).float().cpu()
+        latents_mean = torch.tensor(vae.config.latents_mean).view(1, -1, 1, 1, 1)
+        latents_std = torch.tensor(vae.config.latents_std).view(1, -1, 1, 1, 1)
+        return (latents - latents_mean) / latents_std
+
+    encoders.encode_vae_condition = clipwise
+
+
 def build_pipelines(device: str):
     from diffusers import ComponentsManager, ModularPipeline
     from diffusers.modular_pipelines import SequentialPipelineBlocks
 
     blocks = ModularPipeline.from_pretrained(ROOT).blocks
+    if os.environ.get("OMNI_MAX_SECONDS"):
+        # A clip longer than 15 s (scripts/render.py --seconds): the pipeline holds generation to 15 s; encoding a
+        # longer structure video and target lifts that ceiling.
+        from diffusers.modular_pipelines.minimax_h3.modular_pipeline import MiniMaxH3ModularPipeline
+
+        limit = float(os.environ["OMNI_MAX_SECONDS"])
+        MiniMaxH3ModularPipeline.max_duration = property(lambda self: limit)
+        # The VAE encodes every 17-frame clip on its own; a clip sliced from a minute of frames keeps the whole video's
+        # strides and overflows 32-bit indexing in its padding - a contiguous copy of each clip encodes the same numbers.
+        from diffusers.models.autoencoders.autoencoder_kl_minimax_h3 import AutoencoderKLMiniMaxH3
+
+        clip_encode = AutoencoderKLMiniMaxH3._encode_clip
+        AutoencoderKLMiniMaxH3._encode_clip = lambda self, x: clip_encode(self, x.contiguous())
+        _encode_conditions_clipwise()
     manager = ComponentsManager()
     # Weights stay on the card. Offloading moved the text encoder over PCIe on every call, which
     # cost little per sample once warm but made the first call of every process several times

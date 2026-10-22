@@ -9,6 +9,9 @@
         --control solarrenderer_causal_control_lora.safetensors --fewstep solarrenderer_causal_4step_lora.safetensors \
         --structure structure.mp4 --first first.png --prompt prompt.txt --out render.mp4
 
+    # any length up to what the structure video holds (default 6.6 s)
+    python scripts/render.py ... --seconds 60
+
 The inputs are encoded exactly as the training samples were (tools/omni_preencode.py): the structure video laid over
 every target frame, the first frame over latent 0, the prompt through the released Qwen3-VL presentation. The
 renderer is MiniMax-H3's Ref2VA transformer with the four-step LoRA merged into its weights and the control LoRA on
@@ -16,6 +19,9 @@ top, sampled in four evaluations with fresh noise between them. Output: 1344x768
 With --causal the causal pair renders block-causally: each block of at most 5 latents sees the prompt, the first frame,
 the structure of the last 6 blocks and the clean frames of the 5 blocks before it - never a later block - and is
 sampled in four evaluations before it is committed to the cache.
+
+--seconds renders a longer clip, whole: the bidirectional pair samples every frame at once (its memory grows with the
+length), the causal pair streams it block by block (its memory stays that of a few blocks).
 
 The text encoder and the transformer do not share the card: the clip is encoded first, the encoder is released, then
 the transformer is loaded. One GPU runs it end to end. eval/render_benchmark.py uses the same functions to
@@ -37,7 +43,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "src"))
 sys.path.insert(0, str(HERE.parent / "tools"))
 
-FRAMES = 158
+FRAMES = 158  # the trained length, 6.6 s; a clip is 17n + 5 frames, 5n + 2 latents
+FPS = 24
 RANK = ALPHA = 384
 SILENCE = HERE.parent / "assets" / "h3_silence_153_158_170.safetensors"
 
@@ -54,6 +61,8 @@ def parse() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--forwards", type=int, default=4, help="model evaluations; the four-step LoRA was trained for 4")
     p.add_argument("--causal", action="store_true", help="the causal LoRA pair: stream block by block")
+    p.add_argument("--seconds", type=float, default=0.0,
+                   help="the length (default 6.6 s), up to what the structure video holds")
     p.add_argument("--device", default="cuda:0")
     return p.parse_args()
 
@@ -82,12 +91,21 @@ def sample_of(name: str, prompt: str, structure: str | None, first: str | None, 
     return {"id": name, "target": target or structure, "text": prompt, "observations": observations}
 
 
-def encode_sample(encoder, sample: dict, member: str) -> None:
+def encode_sample(encoder, sample: dict, member: str, frames: int = FRAMES) -> None:
     from safetensors.torch import save_file
 
     pre, pipes = encoder
-    tensors, meta = pre.encode(sample, pipes, FRAMES)
+    tensors, meta = pre.encode(sample, pipes, frames)
     save_file(tensors, member, metadata={"omni": json.dumps(meta)})
+
+
+def clip_frames(seconds: float, held: int) -> tuple[int, int]:
+    """``(frames to encode, frames to keep)`` for a clip of ``seconds``: encoded at the next 17n + 5 length the
+    structure video (``held`` frames) covers, never under the trained 158, and cut to the length asked for."""
+
+    keep = min(round(seconds * FPS), held) if seconds else FRAMES
+    encoded = max(min(17 * -(-(keep - 5) // 17) + 5, 17 * ((held - 5) // 17) + 5), FRAMES)
+    return encoded, min(keep, encoded)
 
 
 def free_cuda() -> None:
@@ -113,12 +131,13 @@ def lora_pairs(path: str) -> tuple[dict, float]:
 CAUSAL = {"mode": "teacher", "chunk": 5, "window": 6, "corrupt": 0.0}  # the causal pair's training plan
 
 
-def load_renderer(h3: str, control: str, fewstep: str, device: str, causal: bool = False):
-    """MiniMax-H3's Ref2VA transformer, the four-step LoRA merged in, the control LoRA on top; returns a renderer."""
+def load_renderer(h3: str, control: str, fewstep: str, device: str, causal: bool = False, frames: int = FRAMES):
+    """MiniMax-H3's Ref2VA transformer, the four-step LoRA merged in, the control LoRA on top; returns a renderer for
+    clips of up to ``frames``."""
 
     import torch
 
-    from solarwm.backends.minimax_h3.artifacts import load_silence_latents
+    from solarwm.backends.minimax_h3.artifacts import extend_silence, load_silence_latents
     from solarwm.backends.minimax_h3.lora import inject_h3_lora, merge_lora_delta
     from solarwm.backends.minimax_h3.observations import observation_profile_from_train_config
     from solarwm.backends.minimax_h3.optional import load_conditioners, load_transformer
@@ -133,17 +152,24 @@ def load_renderer(h3: str, control: str, fewstep: str, device: str, causal: bool
         "adapter": {"rank": RANK, "alpha": ALPHA, "dropout": 0.0},
     }
     modules = load_transformer(model_cfg, device=torch.device(device))
-    pairs, alpha = lora_pairs(fewstep)
+    # One LoRA is merged into the weights, the other runs on top, as each pair was trained: the bidirectional four-step
+    # LoRA under the control LoRA, the causal control LoRA under its four-step student. Merging the other way rounds
+    # the top LoRA into bf16 weights and the picture goes hazy.
+    under, top = (control, fewstep) if causal else (fewstep, control)
+    pairs, alpha = lora_pairs(under)
     rank = int(next(v for k, v in pairs.items() if k.endswith("lora_A.weight")).shape[0])
     merged = merge_lora_delta(modules.transformer, pairs, alpha=alpha, rank=rank, scale=1.0)
-    print(f"four-step LoRA merged into {merged} weights", flush=True)
+    print(f"{Path(under).name} merged into {merged} weights", flush=True)
     wrapped, lora = inject_h3_lora(modules.transformer, model_cfg["adapter"], base_identity={})
-    pairs, _alpha = lora_pairs(control)
+    pairs, _alpha = lora_pairs(top)
     lora.load_state_dict({f"base_model.model.{k}": v for k, v in pairs.items()}, broadcast=False)
     conditioners = load_conditioners(
         model_cfg, device=torch.device(device), qwen=False, video_vae=True, audio_vae=False, schedulers=False
     )
     silence, _ = load_silence_latents(str(SILENCE), pixel_frames=FRAMES)
+    if frames > FRAMES:  # a longer clip's silent soundtrack: the encoded silence is steady away from its ends
+        silence = extend_silence(load_silence_latents(str(SILENCE), pixel_frames=170)[0],
+                                 H3Stage0p5Core.audio_latents(5 * ((frames - 5) // 17) + 2))
     if causal:
         from solarwm.backends.minimax_h3.omni_causal import H3OmniCausalCore
 
@@ -155,8 +181,9 @@ def load_renderer(h3: str, control: str, fewstep: str, device: str, causal: bool
     return core, conditioners, torch.device(device)
 
 
-def render_member(renderer, member: str, out: str, seed: int = 0, forwards: int = 4) -> float:
-    """Sample one encoded clip and write its mp4; returns the sampling time in seconds."""
+def render_member(renderer, member: str, out: str, seed: int = 0, forwards: int = 4, keep: int = 0) -> float:
+    """Sample one encoded clip and write its mp4 (its first ``keep`` frames, if given); returns the sampling time in
+    seconds."""
 
     import torch
 
@@ -186,7 +213,7 @@ def render_member(renderer, member: str, out: str, seed: int = 0, forwards: int 
     took = time.perf_counter() - began
     decoded = decode_h3_latents(conditioners.video_vae, latents, device=device)
     Path(out).parent.mkdir(parents=True, exist_ok=True)
-    Path(out + ".tmp").write_bytes(_mp4_bytes(decoded))
+    Path(out + ".tmp").write_bytes(_mp4_bytes(decoded[:, :, : keep or None]))
     os.replace(out + ".tmp", out)
     return took
 
@@ -195,16 +222,24 @@ def main() -> None:
     args = parse()
     with tempfile.TemporaryDirectory() as work:
         began = time.perf_counter()
+        if args.seconds:
+            # H3's pipeline holds a clip to 15 s; a longer structure video is encoded whole
+            os.environ["OMNI_MAX_SECONDS"] = str(max(args.seconds + 1, 15))
         encoder = load_encoder(args.h3, args.device)
+        pre, _pipes = encoder
+        held = int(pre.frame_count(args.structure) * FPS / pre.frame_rate(args.structure))
+        frames, keep = clip_frames(args.seconds, held)
         member = f"{work}/member.safetensors"
         prompt = Path(args.prompt).read_text()
-        encode_sample(encoder, sample_of(Path(args.out).stem, prompt, args.structure, args.first or None), member)
-        del encoder
+        encode_sample(encoder, sample_of(Path(args.out).stem, prompt, args.structure, args.first or None), member,
+                      frames)
+        del encoder, pre, _pipes
         free_cuda()
-        print(f"encoded in {time.perf_counter() - began:.0f} s", flush=True)
-        renderer = load_renderer(args.h3, args.control, args.fewstep, args.device, causal=args.causal)
-        took = render_member(renderer, member, args.out, args.seed, args.forwards)
-    print(f"sampled {args.forwards} steps in {took:.0f} s; wrote {args.out}", flush=True)
+        print(f"encoded {frames} frames in {time.perf_counter() - began:.0f} s", flush=True)
+        renderer = load_renderer(args.h3, args.control, args.fewstep, args.device, causal=args.causal, frames=frames)
+        took = render_member(renderer, member, args.out, args.seed, args.forwards, keep)
+    print(f"sampled {args.forwards} steps in {took:.0f} s; wrote {keep} frames ({keep / FPS:.1f} s) to {args.out}",
+          flush=True)
 
 
 if __name__ == "__main__":
