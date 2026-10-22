@@ -152,12 +152,16 @@ def load_renderer(h3: str, control: str, fewstep: str, device: str, causal: bool
         "adapter": {"rank": RANK, "alpha": ALPHA, "dropout": 0.0},
     }
     modules = load_transformer(model_cfg, device=torch.device(device))
-    pairs, alpha = lora_pairs(fewstep)
+    # One LoRA is merged into the weights, the other runs on top, as each pair was trained: the bidirectional four-step
+    # LoRA under the control LoRA, the causal control LoRA under its four-step student. Merging the other way rounds
+    # the top LoRA into bf16 weights and the picture goes hazy.
+    under, top = (control, fewstep) if causal else (fewstep, control)
+    pairs, alpha = lora_pairs(under)
     rank = int(next(v for k, v in pairs.items() if k.endswith("lora_A.weight")).shape[0])
     merged = merge_lora_delta(modules.transformer, pairs, alpha=alpha, rank=rank, scale=1.0)
-    print(f"four-step LoRA merged into {merged} weights", flush=True)
+    print(f"{Path(under).name} merged into {merged} weights", flush=True)
     wrapped, lora = inject_h3_lora(modules.transformer, model_cfg["adapter"], base_identity={})
-    pairs, _alpha = lora_pairs(control)
+    pairs, _alpha = lora_pairs(top)
     lora.load_state_dict({f"base_model.model.{k}": v for k, v in pairs.items()}, broadcast=False)
     conditioners = load_conditioners(
         model_cfg, device=torch.device(device), qwen=False, video_vae=True, audio_vae=False, schedulers=False
