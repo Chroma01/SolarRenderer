@@ -60,6 +60,22 @@ python scripts/render.py --h3 ./MiniMax-H3 --causal \
 
 The inputs and the output are the same as above.
 
+## Render a longer clip
+
+`--seconds` sets the length, up to what the structure video holds (the default is the trained 6.6 s), with either pair:
+
+```bash
+python scripts/render.py --h3 ./MiniMax-H3 --causal \
+    --control weights/solarrenderer_causal_control_lora.safetensors \
+    --fewstep weights/solarrenderer_causal_4step_lora.safetensors \
+    --structure structure.mp4 --first first.png --prompt prompt.txt --out render.mp4 --seconds 60
+```
+
+The clip is rendered whole either way. The bidirectional pair samples every frame at once, so its memory and time grow
+with the length (attention over every frame). The causal pair streams it block by block, each block seeing the
+structure of its last 6 blocks and the frames of the 5 blocks before it, so its memory stays that of a few blocks and
+its time grows in step with the length. Write the prompt for the whole clip.
+
 ## Render the benchmark
 
 `eval/render_benchmark.py` renders every benchmark case with each model loaded once per GPU; see [`eval/README.md`](../eval/README.md).
