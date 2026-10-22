@@ -138,7 +138,7 @@ def load_renderer(h3: str, control: str, fewstep: str, device: str, causal: bool
     import torch
 
     from solarwm.backends.minimax_h3.artifacts import extend_silence, load_silence_latents
-    from solarwm.backends.minimax_h3.lora import inject_h3_lora, merge_lora_delta
+    from solarwm.backends.minimax_h3.lora import merge_lora_delta
     from solarwm.backends.minimax_h3.observations import observation_profile_from_train_config
     from solarwm.backends.minimax_h3.optional import load_conditioners, load_transformer
     from solarwm.backends.minimax_h3.stage0p5 import H3Stage0p5Core
@@ -152,17 +152,20 @@ def load_renderer(h3: str, control: str, fewstep: str, device: str, causal: bool
         "adapter": {"rank": RANK, "alpha": ALPHA, "dropout": 0.0},
     }
     modules = load_transformer(model_cfg, device=torch.device(device))
-    # One LoRA is merged into the weights, the other runs on top, as each pair was trained: the bidirectional four-step
-    # LoRA under the control LoRA, the causal control LoRA under its four-step student. Merging the other way rounds
-    # the top LoRA into bf16 weights and the picture goes hazy.
-    under, top = (control, fewstep) if causal else (fewstep, control)
-    pairs, alpha = lora_pairs(under)
-    rank = int(next(v for k, v in pairs.items() if k.endswith("lora_A.weight")).shape[0])
-    merged = merge_lora_delta(modules.transformer, pairs, alpha=alpha, rank=rank, scale=1.0)
-    print(f"{Path(under).name} merged into {merged} weights", flush=True)
-    wrapped, lora = inject_h3_lora(modules.transformer, model_cfg["adapter"], base_identity={})
-    pairs, _alpha = lora_pairs(top)
-    lora.load_state_dict({f"base_model.model.{k}": v for k, v in pairs.items()}, broadcast=False)
+    # Both LoRAs are merged into the weights at once: their deltas summed in float32 and rounded into bf16 a single
+    # time, nothing left running on top (a LoRA computed beside bf16 weights, or merged one at a time, softens the
+    # picture). Each pair's up projection carries its own alpha/rank, so the stack adds exactly B1 A1 + B2 A2.
+    stacked: dict = {}
+    for path in (fewstep, control):
+        pairs, alpha = lora_pairs(path)
+        rank = int(next(v for k, v in pairs.items() if k.endswith("lora_A.weight")).shape[0])
+        for key, value in pairs.items():
+            value = value if key.endswith("lora_A.weight") else value.float() * (alpha / rank)
+            stacked[key] = torch.cat((stacked[key], value.float()), dim=0 if key.endswith("lora_A.weight") else 1) \
+                if key in stacked else value.float()
+    merged = merge_lora_delta(modules.transformer, stacked, alpha=None, rank=None, scale=1.0)
+    print(f"both LoRAs merged into {merged} weights", flush=True)
+    wrapped = modules.transformer
     conditioners = load_conditioners(
         model_cfg, device=torch.device(device), qwen=False, video_vae=True, audio_vae=False, schedulers=False
     )
