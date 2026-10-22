@@ -14,8 +14,8 @@
 
 The inputs are encoded exactly as the training samples were (tools/omni_preencode.py): the structure video laid over
 every target frame, the first frame over latent 0, the prompt through the released Qwen3-VL presentation. The
-renderer is MiniMax-H3's Ref2VA transformer with the four-step LoRA merged into its weights and the control LoRA on
-top, sampled in four evaluations with fresh noise between them. Output: 1344x768 (or 768x1344), 24 fps, 158 frames.
+renderer is MiniMax-H3's Ref2VA transformer with the four-step LoRA and the control LoRA merged into its weights at
+once, sampled in four evaluations with fresh noise between them. Output: 1344x768 (or 768x1344), 24 fps, 158 frames.
 With --causal the causal pair renders block-causally: each block of at most 5 latents sees the prompt, the first frame,
 the structure of the last 6 blocks and the clean frames of the 5 blocks before it - never a later block - and is
 sampled in four evaluations before it is committed to the cache.
@@ -132,13 +132,13 @@ CAUSAL = {"mode": "teacher", "chunk": 5, "window": 6, "corrupt": 0.0}  # the cau
 
 
 def load_renderer(h3: str, control: str, fewstep: str, device: str, causal: bool = False, frames: int = FRAMES):
-    """MiniMax-H3's Ref2VA transformer, the four-step LoRA merged in, the control LoRA on top; returns a renderer for
-    clips of up to ``frames``."""
+    """MiniMax-H3's Ref2VA transformer with the four-step and control LoRAs merged in; returns a renderer for clips of
+    up to ``frames``."""
 
     import torch
 
     from solarwm.backends.minimax_h3.artifacts import extend_silence, load_silence_latents
-    from solarwm.backends.minimax_h3.lora import inject_h3_lora, merge_lora_delta
+    from solarwm.backends.minimax_h3.lora import merge_lora_delta
     from solarwm.backends.minimax_h3.observations import observation_profile_from_train_config
     from solarwm.backends.minimax_h3.optional import load_conditioners, load_transformer
     from solarwm.backends.minimax_h3.stage0p5 import H3Stage0p5Core
@@ -152,17 +152,20 @@ def load_renderer(h3: str, control: str, fewstep: str, device: str, causal: bool
         "adapter": {"rank": RANK, "alpha": ALPHA, "dropout": 0.0},
     }
     modules = load_transformer(model_cfg, device=torch.device(device))
-    # One LoRA is merged into the weights, the other runs on top, as each pair was trained: the bidirectional four-step
-    # LoRA under the control LoRA, the causal control LoRA under its four-step student. Merging the other way rounds
-    # the top LoRA into bf16 weights and the picture goes hazy.
-    under, top = (control, fewstep) if causal else (fewstep, control)
-    pairs, alpha = lora_pairs(under)
-    rank = int(next(v for k, v in pairs.items() if k.endswith("lora_A.weight")).shape[0])
-    merged = merge_lora_delta(modules.transformer, pairs, alpha=alpha, rank=rank, scale=1.0)
-    print(f"{Path(under).name} merged into {merged} weights", flush=True)
-    wrapped, lora = inject_h3_lora(modules.transformer, model_cfg["adapter"], base_identity={})
-    pairs, _alpha = lora_pairs(top)
-    lora.load_state_dict({f"base_model.model.{k}": v for k, v in pairs.items()}, broadcast=False)
+    # Both LoRAs are merged into the weights at once: their deltas summed in float32 and rounded into bf16 a single
+    # time, nothing left running on top (a LoRA computed beside bf16 weights, or merged one at a time, softens the
+    # picture). Each pair's up projection carries its own alpha/rank, so the stack adds exactly B1 A1 + B2 A2.
+    stacked: dict = {}
+    for path in (fewstep, control):
+        pairs, alpha = lora_pairs(path)
+        rank = int(next(v for k, v in pairs.items() if k.endswith("lora_A.weight")).shape[0])
+        for key, value in pairs.items():
+            value = value if key.endswith("lora_A.weight") else value.float() * (alpha / rank)
+            stacked[key] = torch.cat((stacked[key], value.float()), dim=0 if key.endswith("lora_A.weight") else 1) \
+                if key in stacked else value.float()
+    merged = merge_lora_delta(modules.transformer, stacked, alpha=None, rank=None, scale=1.0)
+    print(f"both LoRAs merged into {merged} weights", flush=True)
+    wrapped = modules.transformer
     conditioners = load_conditioners(
         model_cfg, device=torch.device(device), qwen=False, video_vae=True, audio_vae=False, schedulers=False
     )
