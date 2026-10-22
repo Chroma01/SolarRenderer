@@ -59,7 +59,7 @@ pip install -e . && pip install flash-attn==2.7.4.post1 --no-build-isolation
 
 ```bash
 python scripts/prepare_h3.py --dir ./MiniMax-H3
-hf download Enderfga/SolarRenderer solarrenderer_control_lora.safetensors solarrenderer_4step_lora.safetensors \
+hf download Enderfga/SolarRenderer config.json solarrenderer_control_lora.safetensors solarrenderer_4step_lora.safetensors \
     --local-dir ./weights
 ```
 

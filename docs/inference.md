@@ -20,7 +20,7 @@ after the other.
 
 ```bash
 python scripts/prepare_h3.py --dir ./MiniMax-H3
-hf download Enderfga/SolarRenderer solarrenderer_control_lora.safetensors solarrenderer_4step_lora.safetensors \
+hf download Enderfga/SolarRenderer config.json solarrenderer_control_lora.safetensors solarrenderer_4step_lora.safetensors \
     --local-dir ./weights
 ```
 
@@ -50,7 +50,7 @@ generated for the 5 blocks before it, never a later block. Each block is sampled
 key/value cache, so a block can be shown as soon as it is done. Download the causal LoRAs and add `--causal`:
 
 ```bash
-hf download Enderfga/SolarRenderer solarrenderer_causal_control_lora.safetensors \
+hf download Enderfga/SolarRenderer config.json solarrenderer_causal_control_lora.safetensors \
     solarrenderer_causal_4step_lora.safetensors --local-dir ./weights
 python scripts/render.py --h3 ./MiniMax-H3 --causal \
     --control weights/solarrenderer_causal_control_lora.safetensors \
