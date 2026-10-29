@@ -15,8 +15,6 @@
 body mesh, or a sketch it never saw in training) into a finished video, with an optional first frame and a prompt
 deciding the look. It runs on **MiniMax-H3** with two LoRAs and renders a clip in **four steps**.
 A block-causal pair of the same LoRAs streams the clip block by block.
-SolarRenderer is built on [SolarWM](https://github.com/Junchao-cs/SolarWM), the open framework for
-training and inference of video world models ([paper](https://arxiv.org/abs/2609.02886)).
 
 ## News
 
@@ -95,7 +93,7 @@ The Reactor integration is a community contribution; thanks to [Rising0321](http
 
 ## Citation
 
-If you use SolarRenderer in your research, please cite SolarRenderer and SolarWM, the framework on which it is built.
+If you use SolarRenderer in your research, please cite our paper.
 
 ```bibtex
 @misc{fang2026solarrenderer,
@@ -110,6 +108,10 @@ If you use SolarRenderer in your research, please cite SolarRenderer and SolarWM
 }
 ```
 
+<details>
+<summary>SolarWM citation</summary>
+
+If you also use the SolarWM framework, data, or models, please cite
 [SolarWM: Open Data and Scalable Training for Long-Horizon Video World Models](https://arxiv.org/abs/2609.02886):
 
 ```bibtex
@@ -124,13 +126,13 @@ If you use SolarRenderer in your research, please cite SolarRenderer and SolarWM
 }
 ```
 
-<details>
-<summary>Acknowledgement</summary>
+</details>
+
+## Acknowledgement
 
 SolarRenderer builds on [MiniMax-H3](https://huggingface.co/MiniMaxAI/MiniMax-H3), starts its four-step LoRA from
 [DMAD](https://huggingface.co/ZhengmingYu/DMAD), and shares its training framework with
 [SolarWM](https://github.com/Junchao-cs/SolarWM).
-</details>
 
 ## License
 
