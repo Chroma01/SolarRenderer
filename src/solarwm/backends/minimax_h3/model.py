@@ -505,15 +505,21 @@ class SolarMiniMaxH3Transformer3DModel(H3AnyFlowConditioningMixin, MiniMaxH3Tran
         query = query.unflatten(-1, (attn.heads, -1))
         key = key.unflatten(-1, (attn.heads, -1))
         value = value.unflatten(-1, (attn.heads, -1))
-        query = attn.norm_q(query)
-        key = attn.norm_k(key)
+        if getattr(attn, "_solar_fused_qk_rope", False) and sgf_attention is None:
+            from .fused_qk_rope import apply as apply_qk_rope
 
-        if sgf_attention is not None:
-            return cls._sgf_attention_forward(attn, query, key, value, sgf_attention)
+            query, key = apply_qk_rope(query, key, attn.norm_q, attn.norm_k, *rotary_emb)
+        else:
+            query = attn.norm_q(query)
+            key = attn.norm_k(key)
+
+            if sgf_attention is not None:
+                return cls._sgf_attention_forward(attn, query, key, value, sgf_attention)
+
+            query = _apply_rotary_emb(query, *rotary_emb)
+            key = _apply_rotary_emb(key, *rotary_emb)
 
         # H3 native MM-RoPE first, then token-selective camera PRoPE.
-        query = _apply_rotary_emb(query, *rotary_emb)
-        key = _apply_rotary_emb(key, *rotary_emb)
         query, key, value, apply_output, prope_indices = cls._prepare_prope(
             query=query,
             key=key,
