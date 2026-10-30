@@ -45,11 +45,12 @@ captioning pipeline that produced our training samples; the data itself is on
 torchrun --standalone --nproc-per-node 8 -m solarwm train --config configs/control_lora.yaml
 ```
 
-On Hopper GPUs, optional kernels make this step about 1.33x faster (80.8 s to 60.9 s per step on 8 H200s). They
+On Hopper GPUs, optional kernels make this step about 1.35x faster (80.8 s to 59.7 s per step on 8 H200s). They
 are off by default and keep the original precision (bf16 data, fp32 norm statistics, softmax and accumulation):
 
 ```bash
-export SOLAR_HOPPER_ATTENTION=1 SOLAR_HOPPER_FWD192=1 SOLAR_FUSED_ADALN=1 SOLAR_FUSED_QK_ROPE=1 SOLAR_ATTN_CPU_CACHE=24
+export SOLAR_HOPPER_ATTENTION=1 SOLAR_HOPPER_FWD192=1 SOLAR_FUSED_ADALN=1 SOLAR_FUSED_QK_ROPE=1 SOLAR_ATTN_CPU_CACHE=24 \
+       SOLAR_SP_PACK_B1=1
 torchrun --standalone --nproc-per-node 8 -m solarwm train --config configs/control_lora.yaml
 ```
 
@@ -57,7 +58,8 @@ The attention kernels are FlashAttention's Hopper kernels, compiled on the first
 kept under `TORCH_EXTENSIONS_DIR`, else the temporary directory) against the CUTLASS headers of the NGC PyTorch
 container; elsewhere point `SOLAR_CUTLASS_INCLUDE` at a CUTLASS `include/` directory. `SOLAR_ATTN_CPU_CACHE=24` keeps
 every block's attention output for the backward pass instead of recomputing it, 24 blocks of them in pinned host memory
-(about 25 GB per GPU); raise it if GPU memory runs short. These switches were measured and checked on this step only.
+(about 25 GB per GPU); raise it if GPU memory runs short. `SOLAR_SP_PACK_B1=1` packs the sequence-parallel exchange
+directly by destination. These switches were measured and checked on this step only.
 
 **3. Post-train the four-step LoRA with structure guidance** (800 steps at global batch 4). Convert the public DMAD LoRA first,
 then point `train.dmd.init_lora` at it and `train.dmd.control` at the control run's checkpoint directory from step 2 (the
