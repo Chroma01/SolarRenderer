@@ -575,6 +575,10 @@ class SolarMiniMaxH3Transformer3DModel(H3AnyFlowConditioningMixin, MiniMaxH3Tran
                 attention_mask,
                 training=attn.training,
             ).transpose(1, 2)
+        elif getattr(attn.processor, "_attention_backend", None) == "solar_hopper":
+            from .hopper_attention import attention
+
+            attended = attention(query, key, value, attn_mask=attention_mask)
         else:
             attended = dispatch_attention_fn(
                 query,

@@ -129,6 +129,8 @@ def _attention_ops() -> frozenset:
     for name in ("_flash_attn_forward", "_flash_attn_varlen_forward"):
         if hasattr(flash, name):
             ops.add(getattr(flash, name).default)
+    if hasattr(torch.ops.solar_hopper, "forward"):
+        ops.add(torch.ops.solar_hopper.forward.default)
     return frozenset(ops)
 
 
