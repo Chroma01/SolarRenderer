@@ -128,6 +128,10 @@ def load_transformer(model_cfg: Mapping[str, Any], *, device: Any) -> H3RuntimeM
         initialize()
         for block in transformer.transformer_blocks:
             block.attn.processor._attention_backend = "solar_hopper"
+    if os.environ.get("SOLAR_FUSED_ADALN") == "1":
+        from .fused_adaln import install
+
+        install(transformer)
     if model_cfg.get("transformer_device_map") is None:
         transformer = transformer.to(device)
     transformer.camera_intrinsics_mode = str(model_cfg.get("camera_intrinsics_mode", "wan_fixed"))
