@@ -13,8 +13,27 @@ lengths are supported without attention-visible padding.
 
 from __future__ import annotations
 
+import atexit
+import json
+import os
 from dataclasses import dataclass
 from typing import Any
+
+
+_PACK_COUNTS: dict[str, int] = {}
+
+
+def _record_pack_path(path: str) -> None:
+    count = _PACK_COUNTS.get(path, 0)
+    _PACK_COUNTS[path] = count + 1
+    if count == 0:
+        print(f"[solar-sp-pack] {path}", flush=True)
+
+
+@atexit.register
+def _report_pack_paths() -> None:
+    if _PACK_COUNTS:
+        print("[solar-sp-pack-counts] " + json.dumps(_PACK_COUNTS), flush=True)
 
 
 @dataclass
@@ -291,6 +310,12 @@ def _all_to_all_raw(input_: Any, scatter_dim: int, gather_dim: int) -> Any:
     lengths = current.sequence_lengths
     if len(lengths) != world:
         raise RuntimeError("SP sequence lengths were not registered")
+    packed = os.environ.get("SOLAR_SP_PACK_B1") == "1"
+    # All peers must choose the same wire layout, including when one is empty.
+    if packed and (input_.shape[0] != 1 or min(lengths) <= 0):
+        reason = "batch" if input_.shape[0] != 1 else "empty_peer"
+        _record_pack_path("fallback_" + reason)
+        packed = False
 
     if scatter_dim == 2 and gather_dim == 1:
         batch, local_sequence, heads, head_dim = input_.shape
@@ -299,6 +324,25 @@ def _all_to_all_raw(input_: Any, scatter_dim: int, gather_dim: int) -> Any:
         if local_sequence != lengths[current.sp_rank]:
             raise RuntimeError("local sequence length differs from registered SP layout")
         local_heads = heads // world
+        if packed:
+            # Destination-major, then sequence-major within each message.
+            # B=1 lets received source-rank chunks flatten directly into S.
+            send = input_.unflatten(2, (world, local_heads)).permute(2, 0, 1, 3, 4).contiguous()
+            if len(set(lengths)) == 1:
+                _record_pack_path("sequence_to_heads")
+                output = torch.empty_like(send)
+                dist.all_to_all_single(output, send, group=current.sp_group)
+            else:
+                _record_pack_path("sequence_to_heads_unequal")
+                factor = local_heads * head_dim
+                output = input_.new_empty(sum(lengths) * factor)
+                dist.all_to_all_single(
+                    output, send.reshape(-1),
+                    output_split_sizes=[length * factor for length in lengths],
+                    input_split_sizes=[local_sequence * factor] * world,
+                    group=current.sp_group,
+                )
+            return output.view(1, sum(lengths), local_heads, head_dim)
         transposed = input_.transpose(0, 2).contiguous()
         if len(set(lengths)) == 1:
             output = torch.empty_like(transposed)
@@ -330,6 +374,27 @@ def _all_to_all_raw(input_: Any, scatter_dim: int, gather_dim: int) -> Any:
         if sequence != sum(lengths):
             raise RuntimeError("full sequence length differs from registered SP layout")
         local_sequence = lengths[current.sp_rank]
+        if packed:
+            # Sequence chunks already follow destination order. Only the
+            # received source-head chunks need a final layout copy.
+            if len(set(lengths)) == 1:
+                _record_pack_path("heads_to_sequence")
+                send = input_.unflatten(1, (world, local_sequence)).transpose(0, 1).contiguous()
+                output = torch.empty_like(send)
+                dist.all_to_all_single(output, send, group=current.sp_group)
+            else:
+                _record_pack_path("heads_to_sequence_unequal")
+                factor = local_heads * head_dim
+                output = input_.new_empty((world, 1, local_sequence, local_heads, head_dim))
+                dist.all_to_all_single(
+                    output.view(-1), input_.contiguous().view(-1),
+                    output_split_sizes=[local_sequence * factor] * world,
+                    input_split_sizes=[length * factor for length in lengths],
+                    group=current.sp_group,
+                )
+            return output.permute(1, 2, 0, 3, 4).contiguous().view(
+                1, local_sequence, world * local_heads, head_dim
+            )
         transposed = input_.transpose(0, 2).contiguous()
         if len(set(lengths)) == 1:
             transposed = (
