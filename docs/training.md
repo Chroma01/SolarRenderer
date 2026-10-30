@@ -45,6 +45,23 @@ captioning pipeline that produced our training samples; the data itself is on
 torchrun --standalone --nproc-per-node 8 -m solarwm train --config configs/control_lora.yaml
 ```
 
+On Hopper GPUs, optional kernels make this step about 1.35x faster (80.8 s to 59.7 s per step on 8 H200s). They
+are off by default and keep the original precision (bf16 data, fp32 norm statistics, softmax and accumulation):
+
+```bash
+export SOLAR_HOPPER_ATTENTION=1 SOLAR_HOPPER_FWD192=1 SOLAR_FUSED_ADALN=1 SOLAR_FUSED_QK_ROPE=1 SOLAR_ATTN_CPU_CACHE=24 \
+       SOLAR_SP_PACK_B1=1
+torchrun --standalone --nproc-per-node 8 -m solarwm train --config configs/control_lora.yaml
+```
+
+The attention kernels are FlashAttention's Hopper kernels, compiled on the first launch (about 3 minutes; the build is
+kept under `TORCH_EXTENSIONS_DIR`, else the temporary directory) against the CUTLASS headers of the NGC PyTorch
+container; elsewhere point `SOLAR_CUTLASS_INCLUDE` at a CUTLASS `include/` directory. `SOLAR_ATTN_CPU_CACHE=24` keeps
+every block's attention output for the backward pass instead of recomputing it, 24 blocks of them in pinned host memory
+(about 25 GB per GPU); raise it if GPU memory runs short. `SOLAR_SP_PACK_B1=1` packs the sequence-parallel exchange
+directly by destination. This step is the only one checked in full; the other steps below were timed in short runs and
+compared with the original step by step.
+
 **3. Post-train the four-step LoRA with structure guidance** (800 steps at global batch 4). Convert the public DMAD LoRA first,
 then point `train.dmd.init_lora` at it and `train.dmd.control` at the control run's checkpoint directory from step 2 (the
 one holding `adapter.pt`):
@@ -60,6 +77,10 @@ The structure guidance is `train.dmd.structure_guidance` (1 = plain distribution
 1.5; take the live adapter at the last step. To render with your own runs, export each run's LoRA with
 `python scripts/export_lora.py --checkpoint <checkpoint dir> --out <file>.safetensors`.
 
+The same switches except `SOLAR_ATTN_CPU_CACHE` (the three model copies leave too little GPU memory for it) make this
+step about 1.75x faster (254.5 s to 145.4 s per step on 8 H200s); the losses stayed within about 1% of the original
+step by step, the student loss within 4.5%.
+
 ## Causal version
 
 The causal LoRAs follow the same two stages on top of the bidirectional ones. As above, the released causal LoRAs
@@ -73,6 +94,9 @@ control run's checkpoint directory from step 2.
 torchrun --standalone --nproc-per-node 8 -m solarwm train --config configs/causal_control_lora.yaml
 ```
 
+With the same switches (without `SOLAR_ATTN_CPU_CACHE`) a step takes 55.4 s instead of 60.5 s (1.09x): most of this
+step's attention is block-causal and keeps the original kernels.
+
 **5. Post-train the causal four-step LoRA with structure guidance** (1,600 steps at global batch 1). The causal control
 LoRA from step 4 (`train.dmd.student_init`) is frozen in the student's base; the student is a separate four-step LoRA
 that starts as the bidirectional one (`train.dmd.accel_init`) and is distilled on its own block-by-block streams, with
@@ -81,6 +105,8 @@ the bidirectional control LoRA from step 2 (`train.dmd.control`) as the teacher:
 ```bash
 torchrun --standalone --nproc-per-node 8 -m solarwm train --config configs/causal_structure_guided_4step.yaml
 ```
+
+With the same switches (without `SOLAR_ATTN_CPU_CACHE`) a step takes 53.7 s instead of 74.6 s (1.39x).
 
 Export both runs with `scripts/export_lora.py` and render with `scripts/render.py --causal`.
 

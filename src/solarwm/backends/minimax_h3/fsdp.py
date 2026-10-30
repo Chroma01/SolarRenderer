@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import math
+import os
 from collections.abc import Iterable
 from datetime import timedelta
 from typing import Any
@@ -101,11 +102,18 @@ def wrap_h3_fsdp(
     )
     if activation_checkpointing:
         blocks_in_order = [m for m in wrapped.modules() if isinstance(m, transformer_block_cls)]
-        keep = {id(m) for m in blocks_in_order[:saved_attention_blocks]}
+        cpu_cache = os.environ.get("SOLAR_ATTN_CPU_CACHE")
+        offload_count = int(cpu_cache) if cpu_cache is not None else 0
+        if not 0 <= offload_count <= len(blocks_in_order):
+            raise ValueError("SOLAR_ATTN_CPU_CACHE must be between 0 and the block count")
+        keep_count = len(blocks_in_order) if cpu_cache is not None else saved_attention_blocks
+        keep = {id(m) for m in blocks_in_order[:keep_count]}
+        offload = {id(m) for m in blocks_in_order[:offload_count]}
         apply_activation_checkpointing(
             wrapped,
             checkpoint_wrapper_fn=lambda module: block_checkpoint_wrapper(
-                module, save_attention=id(module) in keep
+                module, save_attention=id(module) in keep,
+                cache_all=cpu_cache is not None, offload_attention=id(module) in offload
             ),
             check_fn=lambda module: isinstance(module, transformer_block_cls),
         )
@@ -129,6 +137,8 @@ def _attention_ops() -> frozenset:
     for name in ("_flash_attn_forward", "_flash_attn_varlen_forward"):
         if hasattr(flash, name):
             ops.add(getattr(flash, name).default)
+    if hasattr(torch.ops.solar_hopper, "forward"):
+        ops.add(torch.ops.solar_hopper.forward.default)
     return frozenset(ops)
 
 
@@ -138,14 +148,22 @@ def keep_attention(ctx: Any, op: Any, *args: Any, **kwargs: Any) -> CheckpointPo
     return CheckpointPolicy.MUST_SAVE if op in _attention_ops() else CheckpointPolicy.PREFER_RECOMPUTE
 
 
-def block_checkpoint_wrapper(module: torch.nn.Module, *, save_attention: bool) -> torch.nn.Module:
+def block_checkpoint_wrapper(
+    module: torch.nn.Module, *, save_attention: bool,
+    cache_all: bool = False, offload_attention: bool = False,
+) -> torch.nn.Module:
     """A block recomputed in backward, optionally without running its attention again."""
     if not save_attention:
         return checkpoint_wrapper(module, checkpoint_impl=CheckpointImpl.NO_REENTRANT)
+    if cache_all:
+        from .attention_cache import contexts
+        context_fn = functools.partial(contexts, offload=offload_attention)
+    else:
+        context_fn = functools.partial(create_selective_checkpoint_contexts, keep_attention)
     return checkpoint_wrapper(
         module,
         checkpoint_impl=CheckpointImpl.NO_REENTRANT,
-        context_fn=functools.partial(create_selective_checkpoint_contexts, keep_attention),
+        context_fn=context_fn,
     )
 
 

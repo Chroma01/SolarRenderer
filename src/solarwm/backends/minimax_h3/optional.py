@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -121,6 +122,20 @@ def load_transformer(model_cfg: Mapping[str, Any], *, device: Any) -> H3RuntimeM
     # (including Qwen token refinement and SGF score models) remains Flash.
     requested_backend = str(model_cfg.get("attention_backend", "flash"))
     transformer.set_attention_backend("flash" if requested_backend == "flex" else requested_backend)
+    if os.environ.get("SOLAR_HOPPER_ATTENTION") == "1":
+        from .hopper_attention import initialize
+
+        initialize()
+        for block in transformer.transformer_blocks:
+            block.attn.processor._attention_backend = "solar_hopper"
+    if os.environ.get("SOLAR_FUSED_ADALN") == "1":
+        from .fused_adaln import install
+
+        install(transformer)
+    if os.environ.get("SOLAR_FUSED_QK_ROPE") == "1":
+        from .fused_qk_rope import install as install_qk_rope
+
+        install_qk_rope(transformer)
     if model_cfg.get("transformer_device_map") is None:
         transformer = transformer.to(device)
     transformer.camera_intrinsics_mode = str(model_cfg.get("camera_intrinsics_mode", "wan_fixed"))
